@@ -1,15 +1,26 @@
+import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 
 const client = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
+// Allowed media types supported by Anthropic API
+const ALLOWED_MEDIA_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+];
+
 export async function POST(request) {
   try {
-    const { question, imageBase64 } = await request.json();
+    // Safely parse JSON body
+    const body = await request.json().catch(() => ({}));
+    const { question, imageBase64 } = body;
 
     if (!question && !imageBase64) {
-      return Response.json(
+      return NextResponse.json(
         { error: "Please type a question or upload an image." },
         { status: 400 }
       );
@@ -17,10 +28,10 @@ export async function POST(request) {
 
     const content = [];
 
-    // Safe Base64 handling
+    // Base64 & Media Type Validation
     if (imageBase64) {
       let base64Data = imageBase64;
-      let mediaType = "image/jpeg"; // Default media type
+      let mediaType = "image/jpeg"; // Default fallback
 
       if (imageBase64.includes(",")) {
         const parts = imageBase64.split(",");
@@ -28,9 +39,17 @@ export async function POST(request) {
         base64Data = parts[1];
 
         const match = header.match(/:(.*?);/);
-        if (match) {
-          mediaType = match[1];
+        if (match && match[1]) {
+          mediaType = match[1].toLowerCase();
         }
+      }
+
+      // Clean base64 string (remove accidental whitespace/newlines)
+      base64Data = base64Data.replace(/\s/g, "");
+
+      // Ensure media type is explicitly allowed by Claude API
+      if (!ALLOWED_MEDIA_TYPES.includes(mediaType)) {
+        mediaType = "image/jpeg";
       }
 
       content.push({
@@ -59,33 +78,52 @@ Question: ${question}`
 
     content.push({ type: "text", text: textPrompt });
 
-    // Official model name update
+    // Call Anthropic API
     const response = await client.messages.create({
       model: "claude-3-5-sonnet-20241022",
       max_tokens: 1500,
       messages: [{ role: "user", content }],
     });
 
-    const solution = response.content[0].text;
-    return Response.json({ solution });
+    // Safely find and extract the text block
+    const textBlock = response.content.find((block) => block.type === "text");
+    const solution = textBlock ? textBlock.text : "";
+
+    if (!solution) {
+      return NextResponse.json(
+        { error: "Koi jawab generate nahi ho saka. Dobara try karein." },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ solution });
 
   } catch (error) {
     console.error("API Error:", error);
 
+    // Handle specific API errors
     if (error?.status === 401) {
-      return Response.json(
+      return NextResponse.json(
         { error: "API key invalid hai. Environment variable check karein." },
         { status: 401 }
       );
     }
+
+    if (error?.status === 400) {
+      return NextResponse.json(
+        { error: "Invalid request or image format not supported by Claude." },
+        { status: 400 }
+      );
+    }
+
     if (error?.status === 429) {
-      return Response.json(
+      return NextResponse.json(
         { error: "Bohot zyada requests! Thori der baad try karein." },
         { status: 429 }
       );
     }
 
-    return Response.json(
+    return NextResponse.json(
       { error: "Jawab nahi mila. Dobara try karein." },
       { status: 500 }
     );
