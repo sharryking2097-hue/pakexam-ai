@@ -1,43 +1,80 @@
-import { NextResponse } from "next/server";
+import Anthropic from "@anthropic-ai/sdk";
 
-export async function POST(req) {
+const client = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});
+
+export async function POST(request) {
   try {
-    const { question, imageBase64 } = await req.json();
-    const apiKey = process.env.GEMINI_API_KEY;
+    const { question, imageBase64 } = await request.json();
 
-    if (!apiKey) {
-      return NextResponse.json({ error: "Server Key missing" }, { status: 500 });
+    if (!question && !imageBase64) {
+      return Response.json(
+        { error: "Please type a question or upload an image." },
+        { status: 400 }
+      );
     }
 
-    const systemPrompt = `You are an expert Pakistani BISE Board Examiner. Solve exam questions strictly following board patterns:
-1. Given Data
-2. Formula Used
-3. Step-by-Step Solution
-4. Final Answer with Units (Bold)`;
-
-    const parts = [{ text: `${systemPrompt}\n\nQuestion:\n${question || "Solve image problem"}` }];
+    const content = [];
 
     if (imageBase64) {
-      const mimeType = imageBase64.substring(imageBase64.indexOf(":") + 1, imageBase64.indexOf(";"));
-      const base64Data = imageBase64.split(",")[1];
-      parts.push({
-        inline_data: { mime_type: mimeType || "image/jpeg", data: base64Data }
+      const [header, base64Data] = imageBase64.split(",");
+      const mediaType = header.match(/:(.*?);/)[1];
+
+      content.push({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: mediaType,
+          data: base64Data,
+        },
       });
     }
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+    const textPrompt = question
+      ? `You are a Pakistani BISE Board exam expert. Solve this question step by step.
+- For numerical problems: show every step clearly with formulas
+- For theory questions: give a complete but concise answer
+- Use simple English. If the question is in Urdu, answer in Urdu.
+- At the end, write the final answer clearly.
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contents: [{ parts }] })
+Question: ${question}`
+      : `You are a Pakistani BISE Board exam expert. Look at this exam question image and solve it step by step.
+- For numerical problems: show every step clearly with formulas
+- For theory questions: give a complete but concise answer  
+- Use simple English. If the question is in Urdu, answer in Urdu.
+- At the end, write the final answer clearly.`;
+
+    content.push({ type: "text", text: textPrompt });
+
+    const response = await client.messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 1500,
+      messages: [{ role: "user", content }],
     });
 
-    const data = await response.json();
-    const solution = data.candidates?.[0]?.content?.parts?.[0]?.text || "No response.";
+    const solution = response.content[0].text;
+    return Response.json({ solution });
 
-    return NextResponse.json({ solution });
-  } catch (err) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+  } catch (error) {
+    console.error("API Error:", error);
+
+    if (error.status === 401) {
+      return Response.json(
+        { error: "API key invalid hai. Environment variable check karein." },
+        { status: 401 }
+      );
+    }
+    if (error.status === 429) {
+      return Response.json(
+        { error: "Bohot zyada requests! Thori der baad try karein." },
+        { status: 429 }
+      );
+    }
+
+    return Response.json(
+      { error: "Jawab nahi mila. Dobara try karein." },
+      { status: 500 }
+    );
   }
 }
