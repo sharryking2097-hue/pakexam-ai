@@ -17,9 +17,21 @@ export async function POST(request) {
 
     const content = [];
 
+    // Safe Base64 handling
     if (imageBase64) {
-      const [header, base64Data] = imageBase64.split(",");
-      const mediaType = header.match(/:(.*?);/)[1];
+      let base64Data = imageBase64;
+      let mediaType = "image/jpeg"; // Default media type
+
+      if (imageBase64.includes(",")) {
+        const parts = imageBase64.split(",");
+        const header = parts[0];
+        base64Data = parts[1];
+
+        const match = header.match(/:(.*?);/);
+        if (match) {
+          mediaType = match[1];
+        }
+      }
 
       content.push({
         type: "image",
@@ -47,8 +59,9 @@ Question: ${question}`
 
     content.push({ type: "text", text: textPrompt });
 
+    // Official model name update
     const response = await client.messages.create({
-      model: "claude-sonnet-4-6",
+      model: "claude-3-5-sonnet-20241022",
       max_tokens: 1500,
       messages: [{ role: "user", content }],
     });
@@ -59,13 +72,13 @@ Question: ${question}`
   } catch (error) {
     console.error("API Error:", error);
 
-    if (error.status === 401) {
+    if (error?.status === 401) {
       return Response.json(
         { error: "API key invalid hai. Environment variable check karein." },
         { status: 401 }
       );
     }
-    if (error.status === 429) {
+    if (error?.status === 429) {
       return Response.json(
         { error: "Bohot zyada requests! Thori der baad try karein." },
         { status: 429 }
